@@ -1,12 +1,13 @@
 <script setup>
-import { ref, h, onMounted } from 'vue';
-import { useI18n } from 'vue-i18n'
+import { ref, h, onMounted, watch } from 'vue';
+import { useScopedI18n } from '@/i18n/app'
 import { useRouter } from 'vue-router';
 import { NBadge, NPopconfirm, NButton } from 'naive-ui'
 
 import { useGlobalState } from '../../store'
 import { api } from '../../api'
 import { getRouterPathWithLang } from '../../utils'
+import AddressCredentialModal from '../../components/AddressCredentialModal.vue'
 
 import Login from '../common/Login.vue';
 
@@ -14,46 +15,31 @@ const { jwt } = useGlobalState()
 const message = useMessage()
 const router = useRouter()
 
-const { locale, t } = useI18n({
-    messages: {
-        en: {
-            success: 'success',
-            name: 'Name',
-            mail_count: 'Mail Count',
-            send_count: 'Send Count',
-            actions: 'Actions',
-            changeMailAddress: 'Change Address',
-            unbindAddress: 'Unbind Address',
-            unbindAddressTip: 'Before unbinding, please switch to this email address and save the email address credential.',
-            transferAddress: 'Transfer Address',
-            targetUserEmail: 'Target User Email',
-            transferAddressTip: 'Transfer address to another user will remove the address from your account and transfer it to another user. Are you sure to transfer the address?',
-            address: 'Address',
-            create_or_bind: 'Create or Bind',
-        },
-        zh: {
-            success: '成功',
-            name: '名称',
-            mail_count: '邮件数量',
-            send_count: '发送数量',
-            actions: '操作',
-            changeMailAddress: '切换地址',
-            unbindAddress: '解绑地址',
-            unbindAddressTip: '解绑前请切换到此邮箱地址并保存邮箱地址凭证。',
-            transferAddress: '转移地址',
-            targetUserEmail: '目标用户邮箱',
-            transferAddressTip: '转移地址到其他用户将会从你的账户中移除此地址并转移给其他用户。确定要转移地址吗？',
-            address: '地址',
-            create_or_bind: '创建或绑定',
-        }
-    }
-});
+const { locale, t } = useScopedI18n('views.user.AddressManagement')
+const { t: credentialT } = useScopedI18n('components.AddressCredentialModal')
 
 const data = ref([])
+const count = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
 const showTranferAddress = ref(false)
 const currentAddress = ref("")
 const currentAddressId = ref(0)
 const targetUserEmail = ref('')
+const showAddressCredential = ref(false)
+const currentAddressCredential = ref('')
+const credentialAddress = ref('')
+
+const showCredential = async (row) => {
+    try {
+        const { jwt: addressCredential } = await api.fetch(`/user_api/bind_address_jwt/${row.id}`)
+        currentAddressCredential.value = addressCredential
+        credentialAddress.value = row.name
+        showAddressCredential.value = true
+    } catch (error) {
+        message.error(error.message || "error")
+    }
+}
 
 const changeMailAddress = async (address_id) => {
     try {
@@ -79,7 +65,11 @@ const unbindAddress = async (address_id) => {
             body: JSON.stringify({ address_id })
         });
         message.success(t('unbindAddress') + " " + t('success'));
-        await fetchData();
+        if (page.value === 1) {
+            await fetchData();
+        } else {
+            page.value = 1;
+        }
     } catch (error) {
         console.log(error)
         message.error(error.message || "error");
@@ -104,7 +94,11 @@ const transferAddress = async () => {
             })
         });
         message.success(t('transferAddress') + " " + t('success'));
-        await fetchData();
+        if (page.value === 1) {
+            await fetchData();
+        } else {
+            page.value = 1;
+        }
         showTranferAddress.value = false;
         currentAddressId.value = 0;
         currentAddress.value = "";
@@ -117,10 +111,17 @@ const transferAddress = async () => {
 
 const fetchData = async () => {
     try {
-        const { results } = await api.fetch(
-            `/user_api/bind_address`
+        const params = new URLSearchParams({
+            limit: String(pageSize.value),
+            offset: String((page.value - 1) * pageSize.value),
+        });
+        const { results, count: addressCount } = await api.fetch(
+            `/user_api/bind_address?${params.toString()}`
         );
         data.value = results;
+        if (page.value === 1) {
+            count.value = addressCount;
+        }
     } catch (error) {
         console.log(error)
         message.error(error.message || "error");
@@ -161,6 +162,14 @@ const columns = [
         key: 'actions',
         render(row) {
             return h('div', [
+                h(NButton,
+                    {
+                        tertiary: true,
+                        type: "primary",
+                        onClick: () => showCredential(row)
+                    },
+                    { default: () => credentialT('addressCredential') }
+                ),
                 h(NPopconfirm,
                     {
                         onPositiveClick: () => changeMailAddress(row.id)
@@ -211,10 +220,16 @@ const columns = [
 onMounted(async () => {
     await fetchData()
 })
+
+watch([page, pageSize], async () => {
+    await fetchData();
+})
 </script>
 
 <template>
     <div>
+        <AddressCredentialModal v-model:show="showAddressCredential" :address="credentialAddress"
+            :jwt="currentAddressCredential" />
         <n-modal v-model:show="showTranferAddress" preset="dialog" :title="t('transferAddress')">
             <span>
                 <p>{{ t("transferAddressTip") }}</p>
@@ -229,7 +244,13 @@ onMounted(async () => {
         </n-modal>
         <n-tabs type="segment">
             <n-tab-pane name="address" :tab="t('address')">
-                <div style="overflow: auto;">
+                <div class="address-table-scroll">
+                    <n-pagination v-model:page="page" v-model:page-size="pageSize" :item-count="count"
+                        :page-sizes="[20, 50, 100]" show-size-picker>
+                        <template #prefix="{ itemCount }">
+                            {{ t('itemCount') }}: {{ itemCount }}
+                        </template>
+                    </n-pagination>
                     <n-data-table :columns="columns" :data="data" :bordered="false" embedded />
                 </div>
             </n-tab-pane>
@@ -242,6 +263,16 @@ onMounted(async () => {
 
 <style scoped>
 .n-data-table {
-    min-width: 700px;
+    min-width: 640px;
+}
+
+.address-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.n-pagination {
+    margin-top: 10px;
+    margin-bottom: 10px;
 }
 </style>

@@ -146,3 +146,5 @@ e2e/.e2e-pids
 .dev.vars*
 !.dev.vars.example
 !.env.example
+# SMTP/IMAP proxy persisted IMAP flags (local dev / bare-metal runs)
+smtp_proxy_server/data/
